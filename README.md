@@ -2,10 +2,6 @@
 
 This Jupyter notebook demonstrates how to build an agentic workflow using Google's Agent Development Kit (ADK). It showcases a practical example involving customer support for installing a Nest thermostat.
 
-# Example Agent Workflow using Google's ADK
-
-This Jupyter notebook demonstrates how to build an agentic workflow using Google's Agent Development Kit (ADK). It showcases a practical example involving customer support for installing a Nest thermostat.
-
 **Key Concepts Demonstrated:**
 
 * **Agent Creation:** Defining multiple agents with specific roles and instructions (RAG agent, Reasoning agent, Notes agent, Root agent).
