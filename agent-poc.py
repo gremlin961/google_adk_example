@@ -1,257 +1,301 @@
+# Copyright 2024 Google, LLC. This software is provided as-is,
+# without warranty or representation for any use or purpose. Your
+# use of it is subject to your agreement with Google.
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+#    http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Example Agent Workflow using Google's ADK
+# 
+# This notebook provides an example of building an agentic workflow with Google's new ADK. 
+# For more information please visit  https://google.github.io/adk-docs/
+
+
+
 # Vertex AI Modules
 import vertexai
 from vertexai.preview.generative_models import GenerativeModel, GenerationConfig, Part, Tool, ChatSession, FunctionDeclaration, grounding, GenerationResponse
-from vertexai.preview import rag
+from vertexai.preview import rag # Import the RAG (Retrieval-Augmented Generation) module
 
 # Vertex Agent Modules
-from google.adk.agents import Agent
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
-from google.adk.artifacts.in_memory_artifact_service import InMemoryArtifactService
-from google.adk.tools.agent_tool import AgentTool
+from google.adk.agents import Agent # Base class for creating agents
+from google.adk.runners import Runner # Class to run agent interactions
+from google.adk.sessions import InMemorySessionService # Simple session management (non-persistent)
+from google.adk.artifacts.in_memory_artifact_service import InMemoryArtifactService # In-memory artifact storage (not used explicitly here but part of ADK)
+from google.adk.tools.agent_tool import AgentTool # Wrapper to use one agent as a tool for another
 
-
-# Vertex GenAI Modules
+# Vertex GenAI Modules (Alternative/Legacy way to interact with Gemini, used here for types)
 import google.genai
-from google.genai import types
+from google.genai import types # Used for structuring messages (Content, Part)
 
 # Google Cloud AI Platform Modules
-from google.cloud import aiplatform_v1beta1 as aiplatform # This module helps parse the info for delete_rag_corpa function
-from google.cloud import storage
+from google.cloud import aiplatform_v1beta1 as aiplatform # Specific client for RAG management features
+from google.cloud import storage # Client library for Google Cloud Storage (GCS)
 
 # Other Python Modules
-#import base64
-#from IPython.display import Markdown
-import asyncio
-import requests
-import os
-from typing import List, Dict, TypedDict, Any
-import json
-from urllib.parse import urlparse
-import warnings
-import logging
-
+#import base64 # Not used in the final script
+#from IPython.display import Markdown # Not used in the final script
+import asyncio # For running asynchronous agent interactions
+import requests # For making HTTP requests (to the mock ticket server)
+import os # For interacting with the operating system (paths, environment variables)
+from typing import List, Dict, TypedDict, Any # For type hinting
+import json # For working with JSON data (API requests/responses)
+from urllib.parse import urlparse # For parsing GCS bucket URIs
+import warnings # For suppressing warnings
+import logging # For controlling logging output
 
 # Ignore all warnings
 warnings.filterwarnings("ignore")
+# Set logging level to ERROR to suppress informational messages
 logging.basicConfig(level=logging.ERROR)
 
-
+# --- Configuration ---
 project_id = "rkiles-demo-host-vpc" # Your GCP Project ID
-location = "global" # You can leave this setting as global
-region = "us-central1" # Your region. This notebook has only been tested in us-central1
+location = "global" # Vertex AI RAG location (can be global for certain setups)
+region = "us-central1" # Your GCP region for Vertex AI resources and GCS bucket
 
-corpa_name = "nest-rag-corpus" # This will be the display name of your RAG Engine corpus
+corpa_name = "nest-rag-corpus" # Display name for the Vertex AI RAG Corpus
 
-corpa_document_bucket = "gs://rkiles-test/nest/docs/" # The GCS path to the files you want to ingest into your RAG Engine corpus
+corpa_document_bucket = "gs://rkiles-test/nest/docs/" # Google Cloud Storage path where source documents for RAG are stored
 
-local_documents = "./nest_docs/" # Local directory containing Nest support files to copy
+local_documents = "./nest_docs/" # Local directory containing documents to upload to GCS
 
-ticket_server_url = "http://ticket01:8000" # The url to the mock ticket system. This will be a GCE VM running the ticket_server.py web service.
+ticket_server_url = "http://ticket01:8000" # URL of the mock ticketing system web service
 
-
-
-os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "1"
+# --- Environment Setup ---
+# Set environment variables required by some Google Cloud libraries
+os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "1" # Instructs the google.genai library to use Vertex AI backend
 os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
 os.environ["GOOGLE_CLOUD_LOCATION"] = region
 
-
-
+# --- Initialize Vertex AI SDK ---
+# Initialize the Vertex AI client library with project and location/region details
 vertexai.init(project=project_id, location=region)
 
-
-
+# --- GCS Bucket and Folder Setup ---
+# Parse the GCS bucket URI to get the bucket name and prefix (folder path)
 parsed_uri = urlparse(corpa_document_bucket)
 bucket_name = parsed_uri.netloc
 prefix = parsed_uri.path.lstrip('/')
 
+# Create a GCS client
 storage_client = storage.Client()
 
 # Get the bucket object
 bucket = storage_client.bucket(bucket_name)
 
-# Check if the bucket exists, create it if not
+# Check if the bucket exists, create it if it doesn't
 if not bucket.exists():
     bucket.create()
     print(f"Bucket '{bucket_name}' created successfully.")
 else:
     print(f"Bucket '{bucket_name}' already exists.")
 
-# Create the folder prefix if it doesn't implicitly exist
+# Ensure the specified folder path exists within the bucket.
+# GCS doesn't have real folders, but prefixes. Creating an empty object
+# simulates a folder structure for tools and browsing.
 if prefix:
+    # Ensure the prefix ends with '/' for folder simulation
     blob_name = f"{prefix}" if prefix.endswith('/') else f"{prefix}/"
-    placeholder_blob = bucket.blob(blob_name + ".placeholder")
+    # Create a placeholder blob to represent the folder if it doesn't exist
+    placeholder_blob = bucket.blob(blob_name + ".placeholder") # Use a placeholder file name
     if not placeholder_blob.exists():
-        placeholder_blob.upload_from_string('')
+        placeholder_blob.upload_from_string('') # Upload empty content
         print(f"Simulated folder '{corpa_document_bucket}' created.")
     else:
         print(f"Simulated folder '{corpa_document_bucket}' already exists.")
 
-        
-        
+# --- Upload Local Documents to GCS ---
+# Check if the specified local directory exists
 if os.path.exists(local_documents) and os.path.isdir(local_documents):
+    # Iterate over files in the local directory
     for filename in os.listdir(local_documents):
         local_file_path = os.path.join(local_documents, filename)
+        # Check if it's actually a file (and not a subdirectory)
         if os.path.isfile(local_file_path):
+            # Construct the destination path in GCS including the prefix
             gcs_blob_name = f"{prefix}{filename}"
+            # Get the blob object for the destination
             blob = bucket.blob(gcs_blob_name)
+            # Upload the local file to GCS
             blob.upload_from_filename(local_file_path)
             print(f"Uploaded '{local_file_path}' to 'gs://{bucket_name}/{gcs_blob_name}'")
 else:
+    # Print a message if the local directory is not found
     print(f"Local directory '{local_documents}' does not exist or is not a directory.")
-    
-    
-    
-    
-    
-    
 
+# --- Agent Interaction Function ---
 # @title Define Agent Interaction Function
 import asyncio
 from google.genai import types # For creating message Content/Parts
 
-async def call_agent_async(query: str, runner: Runner, user_id: str, session_id: str): # <--- Added parameters
+# Define an asynchronous function to interact with an ADK agent runner
+async def call_agent_async(query: str, runner: Runner, user_id: str, session_id: str): # <--- Added parameters for session context
     """Sends a query to the agent and prints the final response."""
-    print(f"\n>>> User Query: {query}")
+    #print(f"\n>>> User Query: {query}")
 
-    # Prepare the user's message in ADK format
+    # Prepare the user's message in the ADK Content format
     content = types.Content(role='user', parts=[types.Part(text=query)])
 
-    final_response_text = "Agent did not produce a final response." # Default
+    # Default response text if the agent doesn't provide one
+    final_response_text = "Agent did not produce a final response."
 
-    # Key Concept: run_async executes the agent logic and yields Events.
-    # We iterate through events to find the final answer.
-    # Use the passed-in parameters now:
+    # Key Concept: runner.run_async executes the agent logic and yields Events asynchronously.
+    # We iterate through these events to capture the agent's actions and final response.
+    # Use the passed-in user_id and session_id for maintaining conversation state.
     async for event in runner.run_async(user_id=user_id, session_id=session_id, new_message=content):
-        # You can uncomment the line below to see *all* events during execution
+        # You can uncomment the line below to see *all* events during execution for debugging
         # print(f"  [Event] Author: {event.author}, Type: {type(event).__name__}, Final: {event.is_final_response()}, Content: {event.content}")
 
-        # Key Concept: is_final_response() marks the concluding message for the turn.
+        # Key Concept: event.is_final_response() indicates the agent's concluding message for this turn.
         if event.is_final_response():
+            # Check if the event has content (usually the agent's text response)
             if event.content and event.content.parts:
-                # Assuming text response in the first part
+                # Assume the text response is in the first part
                 final_response_text = event.content.parts[0].text
-            elif event.actions and event.actions.escalate: # Handle potential errors/escalations
+            # Check if the agent escalated (e.g., encountered an error or needs human help)
+            elif event.actions and event.actions.escalate:
                 final_response_text = f"Agent escalated: {event.error_message or 'No specific message.'}"
             # Add more checks here if needed (e.g., specific error codes)
             break # Stop processing events once the final response is found
 
-    print(f"<<< Agent Response: {final_response_text}")
+    # Print the agent's final response for this turn
+    print(f"Agent: {final_response_text}") # Added "Agent: " prefix
 
+# --- RAG Corpus Management Functions ---
 
-
-    
-    
-    
-    
-
+# Function to delete RAG corpora (requires aiplatform client)
+# Note: This function definition exists but is not called in the main script flow.
 def delete_rag_corpora(data: aiplatform.services.vertex_rag_data_service.pagers.ListRagCorporaPager):
-    """Extracts 'name' values from a ListRagCorporaPager and prints them.
+    """Extracts 'name' values from a ListRagCorporaPager and attempts to delete them.
 
     Args:
-        data: The ListRagCorporaPager object returned from the API.
+        data: The ListRagCorporaPager object returned from listing RAG corpora.
     """
-
     names_list = []
-    # First loop: Add names to the list
-    for rag_corpus in data:  # Iterate through the rag_corpora objects
-        if hasattr(rag_corpus, 'name'):  #  Check if the attribute exists
-             names_list.append(rag_corpus.name)
+    # First loop: Collect the names of all corpora from the pager object
+    for rag_corpus in data:  # Iterate through the rag_corpus objects in the pager
+        if hasattr(rag_corpus, 'name'):  # Check if the object has a 'name' attribute
+             names_list.append(rag_corpus.name) # Add the name (resource ID) to the list
 
-    # Second loop: Print the names
+    # Second loop: Iterate through the collected names and delete each corpus
     for corpa_name in names_list:
-        rag.get_corpus(name=corpa_name)
-        rag.delete_corpus(name=corpa_name)
-        
-        
-        
-        
+        print(f"Attempting to delete RAG corpus: {corpa_name}")
+        # Use the vertexai.preview.rag module to delete the corpus by its name
+        # rag.get_corpus(name=corpa_name) # Getting is not strictly necessary before deleting
+        try:
+            rag.delete_corpus(name=corpa_name)
+            print(f"Deleted RAG corpus: {corpa_name}")
+        except Exception as e:
+            print(f"Error deleting corpus {corpa_name}: {e}")
+
+# Function to create a new RAG corpus and import files from GCS
 def create_rag_corpora(display_name, source_bucket):
-    EMBEDDING_MODEL = "publishers/google/models/text-embedding-004"  # @param {type:"string", isTemplate: true}
+    """Creates a Vertex AI RAG Corpus and imports files from a GCS bucket.
+
+    Args:
+        display_name (str): The desired display name for the new RAG Corpus.
+        source_bucket (str): The GCS URI (gs://...) pointing to the files to ingest.
+
+    Returns:
+        rag.RagCorpus: The created RagCorpus object.
+    """
+    # Specify the embedding model to use for the corpus
+    EMBEDDING_MODEL = "publishers/google/models/text-embedding-004"
     embedding_model_config = rag.EmbeddingModelConfig(publisher_model=EMBEDDING_MODEL)
 
+    print(f"Creating RAG Corpus with display name: {display_name}")
+    # Create the RAG corpus using the vertexai.preview.rag module
     rag_corpus = rag.create_corpus(
-        display_name=display_name, embedding_model_config=embedding_model_config
+        display_name=display_name,
+        embedding_model_config=embedding_model_config
     )
-    
+    print(f"RAG Corpus created with name: {rag_corpus.name}")
 
-    
-    INPUT_GCS_BUCKET = (
-        source_bucket
-    )
+    # Specify the GCS path containing the documents to import
+    INPUT_GCS_BUCKET = source_bucket
 
+    print(f"Importing files from {INPUT_GCS_BUCKET} into corpus {rag_corpus.name}...")
+    # Import files from the specified GCS path into the created corpus
+    # This process involves chunking the documents and generating embeddings.
     response = rag.import_files(
         corpus_name=rag_corpus.name,
-        paths=[INPUT_GCS_BUCKET],
-        chunk_size=1024,  # Optional
-        chunk_overlap=100,  # Optional
-        max_embedding_requests_per_min=900,  # Optional
+        paths=[INPUT_GCS_BUCKET], # GCS paths must be in a list
+        chunk_size=1024,  # Optional: Size of text chunks for processing
+        chunk_overlap=100,  # Optional: Overlap between chunks
+        max_embedding_requests_per_min=900,  # Optional: Rate limiting for embedding generation
     )
-    
-    # This code shows how to upload local files to the corpus. 
-    #rag_file = rag.upload_file(
+    print(f"File import process started. Response: {response}") # Note: Import is asynchronous
+
+    # Example of uploading a single local file (commented out)
+    # rag_file = rag.upload_file(
     #    corpus_name=rag_corpus.name,
     #    path="./test.txt",
     #    display_name="test.txt",
     #    description="my test file"
-    #)
-    
+    # )
+
+    # Return the created corpus object
     return rag_corpus
 
-
+# --- Agent Tool Definitions ---
 # @title Define Tools for creating a ticket, adding notes to a ticket, add a file to the session, and getting the GCS URI
 
-
+# Tool function to create a support ticket via a mock API
 def create_ticket(ticket_data: Dict) -> Dict:
     """
-    Creates a ticket via the /ticket endpoint.
+    Creates a ticket via the /ticket endpoint of the mock ticket server.
 
     Args:
-        ticket_data: A dictionary containing the ticket data
-                     (ticket_id, description, customer_id, contact_name).
+        ticket_data: A dictionary containing ticket details like
+                     { "ticket_id": ..., "description": ..., "customer_id": ..., "contact_name": ... }.
 
     Returns:
-        A dictionary containing the API response.  Handles errors gracefully.
+        A dictionary containing the API response (usually success status or created ticket details),
+        or an error dictionary if the request fails.
     """
-    url = f"{ticket_server_url}/ticket"
-    headers = {"Content-Type": "application/json"}
+    url = f"{ticket_server_url}/ticket" # Construct the API endpoint URL
+    headers = {"Content-Type": "application/json"} # Set request headers
 
     try:
+        # Send a POST request with the ticket data as JSON
         response = requests.post(url, headers=headers, data=json.dumps(ticket_data))
-        response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
+        # Raise an exception for bad HTTP status codes (4xx or 5xx)
+        response.raise_for_status()
+        # Return the parsed JSON response from the API
         return response.json()
     except requests.exceptions.RequestException as e:
-        return {"error": f"Request failed: {e}"}
-    
-    
-    
-    
-    
+        # Catch potential request errors (network issues, invalid URL, etc.)
+        print(f"Error in create_ticket: {e}") # Log the error
+        return {"error": f"Request failed: {e}"} # Return an error dictionary
+
+# Tool function to add a note to an existing ticket via a mock API
 def add_note(ticket_id: int, contact_name: str, note: str) -> Dict[str, Any]:
     """
-    Adds a note to a ticket via the API's /notes endpoint.
-
-    Sends the provided ticket details as JSON to the API and returns
-    the parsed JSON response from the server.
+    Adds a note to a specific ticket via the /notes endpoint of the mock ticket server.
 
     Args:
-        ticket_id: int - The ID number of the ticket.
-        contact_name: str - The name of the contact person.
-        note: str - The content of the note to add.
+        ticket_id (int): The ID of the ticket to add the note to.
+        contact_name (str): The name of the person adding the note.
+        note (str): The content of the note.
 
     Returns:
-         Dict[str, Any]:
-            - On success: A dictionary representing the parsed JSON response
-              from the API (content depends on the specific API implementation,
-              often includes details of the created note or a success status).
-            - On failure (request exception or non-2xx HTTP status):
-              A dictionary containing an 'error' key with a description of the failure,
-              e.g., {"error": "Request failed: 404 Client Error: Not Found for url: ..."}.
+        Dict[str, Any]: A dictionary containing the API response (e.g., success confirmation),
+                       or an error dictionary if the request fails.
     """
-    url = f"{ticket_server_url}/notes"
-    headers = {"Content-Type": "application/json"}
+    url = f"{ticket_server_url}/notes" # Construct the API endpoint URL
+    headers = {"Content-Type": "application/json"} # Set request headers
 
-    # Construct the dictionary *inside* the function
+    # Construct the data payload for the API request
     note_data = {
         "ticket_id": ticket_id,
         "contact_name": contact_name,
@@ -259,359 +303,381 @@ def add_note(ticket_id: int, contact_name: str, note: str) -> Dict[str, Any]:
     }
 
     try:
+        # Send a POST request with the note data as JSON
         response = requests.post(url, headers=headers, data=json.dumps(note_data))
+        # Raise an exception for bad HTTP status codes
         response.raise_for_status()
+        # Return the parsed JSON response from the API
         return response.json()
     except requests.exceptions.RequestException as e:
-        return {"error": f"Request failed: {e}"}
+        # Catch potential request errors
+        print(f"Error in add_note: {e}") # Log the error
+        return {"error": f"Request failed: {e}"} # Return an error dictionary
 
-    
-    
-    
-    
-    
-#def add_file_to_session(uri: str) -> types.Content:
-def add_file_to_session(uri: str) -> str:
+# Tool function to represent adding a file to the agent's context (for reasoning)
+# Note: The implementation using types.Part.from_uri might have issues or specific requirements
+# within the ADK framework, hence the return type change to `str` in the user's code.
+# The core idea is to signal *which* file should be considered by the next agent.
+# def add_file_to_session(uri: str) -> types.Content: # Original intended signature
+def add_file_to_session(uri: str) -> str: # Modified signature as per user code
     """
-    Adds a specific file from Google Cloud Storage (GCS) to the current session state for agent processing.
+    Represents the action of making a file from GCS available to the agent's context for the current session.
 
-    This function takes a GCS URI for a file and wraps it in a `types.Content` object.
-    This object is then typically used to make the file's content accessible to the
-    agent for tasks like summarization, question answering, or data extraction
-    related specifically to that file within the ongoing conversation or session.
-    The MIME type is assumed to be inferred by the underlying system or defaults.
-
-    Use this function *after* you have identified a specific GCS URI (e.g., using
-    `get_gcs_uri` or similar) that you need the agent to analyze or reference directly.
+    This function takes a GCS URI and is intended to signal that the content of this file
+    should be accessible for subsequent processing steps within the agent's turn,
+    particularly for the `reasoning_agent`. The actual mechanism of making the file content
+    available might happen implicitly within the ADK framework when used correctly or might
+    require specific handling not fully implemented here.
 
     Args:
-        uri: str - The complete Google Cloud Storage URI of the file to add.
-                 Must be in the format "gs://bucket_name/path/to/file.pdf".
-                 Example: "gs://my-doc-bucket/reports/q1_report.pdf"
+        uri (str): The Google Cloud Storage URI of the file (e.g., "gs://bucket/file.pdf").
 
     Returns:
-         types.Content - A structured Content object representing the referenced file.
-                       This object has `role='user'` and contains a `types.Part`
-                       that holds the reference to the provided GCS URI.
-                       This Content object can be passed to the agent in subsequent calls.
+        str: Currently returns a string representation, likely indicating the file was processed.
+             The original intent might have been to return a structured `types.Content` object.
     """
-    print(uri)
-    content = types.Content(
-        role='user',
-        parts=[
-            # Try passing ONLY the uri positionally, based on the error message "takes 1 positional argument"
-            types.Part.from_uri(
-                file_uri=uri,
-                mime_type="application/pdf",
-            )
-        ]
-    )
+    print(f"Tool 'add_file_to_session' called with URI: {uri}")
+    # This part attempts to create a Content object referencing the GCS URI.
+    # The effectiveness depends on how the ADK runner/model handles this specific Part type.
+    # Based on the change to return `str`, this Content object might not be directly used as intended.
+    # content = types.Content(
+    #     role='user', # Role might need adjustment depending on how it's processed
+    #     parts=[
+    #         types.Part.from_uri(
+    #             file_uri=uri,
+    #             # MIME type might be important for processing
+    #             mime_type="application/pdf", # Assuming PDF, might need dynamic detection
+    #         )
+    #     ]
+    # )
+    # Returning a simple string confirmation instead of the Content object
+    return f"File at URI {uri} acknowledged for session context."
 
-    return content
-
-
-
-
-
+# Tool function to query the RAG corpus and retrieve relevant GCS URIs
 def get_gcs_uri(query: str) -> str:
     """
-    Retrieves Google Cloud Storage (GCS) URIs for documents relevant to a given query.
-
-    This function queries a pre-configured Retrieval-Augmented Generation (RAG)
-    corpus to find documents related to the input query string. It extracts
-    the source GCS URIs from the top relevant documents identified by the
-    RAG system based on semantic similarity. Use this function when you need
-    to find the source files in GCS that contain information related to a
-    specific question or topic.
+    Queries the configured Vertex AI RAG corpus to find relevant document URIs based on the input query.
 
     Args:
-        query: str - The natural language query or topic to search for within
-                 the RAG corpus. For example: "What were the Q3 sales figures?"
-                 or "Tell me about project Alpha's latest status".
+        query (str): The natural language query to search for in the RAG corpus.
 
     Returns:
-         str - A JSON string representing a list of unique GCS URIs. These URIs
-               point to the source documents found to be relevant to the query.
-               Returns a JSON string representing an empty list ('[]') if no
-               relevant documents meet the similarity criteria.
-               Example return value: '["gs://my-bucket/doc1.pdf", "gs://my-bucket/report_q3.txt"]'
+        str: A JSON string representing a list of unique GCS URIs of the relevant documents found.
+             Returns an empty JSON list '[]' if no relevant documents are found.
+             Example: '["gs://my-bucket/doc1.pdf", "gs://my-bucket/report_q3.txt"]'
     """
-    query_response = rag.retrieval_query(
-        rag_resources=[
-            rag.RagResource(
-                rag_corpus=rag_corpus.name,
-                # Optional: supply IDs from `rag.list_files()`.
-                # rag_file_ids=["rag-file-1", "rag-file-2", ...],
-            )
-        ],
-        text=f'''
-        {query}
-        ''',
-        similarity_top_k=10,  # Optional
-        vector_distance_threshold=0.5,  # Optional
-    )
-    #print(response)
-    uri_set = set()
-    for context in query_response.contexts.contexts:
-        uri_set.add(context.source_uri)
-        #json.dumps(list(uri_set))
-    #doc_uri = uri_set.pop()
-    doc_uri = json.dumps(list(uri_set))
-    return doc_uri
+    if not rag_corpus: # Check if rag_corpus object is available
+        return json.dumps({"error": "RAG Corpus not initialized"})
+
+    print(f"Tool 'get_gcs_uri' called with query: {query}")
+    try:
+        # Perform a retrieval query against the RAG corpus
+        query_response = rag.retrieval_query(
+            rag_resources=[
+                rag.RagResource(
+                    rag_corpus=rag_corpus.name, # Use the name (resource ID) of the corpus
+                    # Optional: Filter by specific file IDs if needed
+                    # rag_file_ids=["rag-file-1", "rag-file-2", ...],
+                )
+            ],
+            text=query, # The user's query
+            similarity_top_k=10,  # Optional: Max number of results to retrieve
+            vector_distance_threshold=0.5,  # Optional: Similarity threshold (lower means more similar)
+        )
+
+        # Extract the source URIs from the response contexts
+        uri_set = set() # Use a set to automatically handle duplicates
+        if query_response.contexts and hasattr(query_response.contexts, 'contexts'):
+             for context in query_response.contexts.contexts:
+                if hasattr(context, 'source_uri'):
+                    uri_set.add(context.source_uri)
+
+        # Convert the set of unique URIs to a list and then to a JSON string
+        doc_uris_json = json.dumps(list(uri_set))
+        print(f"Tool 'get_gcs_uri' found URIs: {doc_uris_json}")
+        return doc_uris_json
+    except Exception as e:
+        print(f"Error during RAG query in get_gcs_uri: {e}")
+        return json.dumps({"error": f"RAG query failed: {e}"})
 
 
-
-
-
+# --- RAG Corpus Initialization ---
+# List existing RAG corpora in the project/location
+print("Checking for existing RAG Corpora...")
 existing_corpora = rag.list_corpora()
 
-print(existing_corpora)
+# Print the raw response for debugging if needed
+# print(existing_corpora)
 
+# Variable to hold the target RAG corpus object
+rag_corpus = None # Initialize to None
 
-# Variable to hold the corpus if found
-found_corpus = None
-
-# Iterate through all existing RAG corpora
-for corpus in existing_corpora.rag_corpora: # Ensure you iterate the correct attribute
-    # Check if display_name exists and matches
+# Iterate through the listed RAG corpora
+# Note: The actual corpora are usually in an attribute like 'rag_corpora' of the response object
+corpora_list = getattr(existing_corpora, 'rag_corpora', []) # Safely get the list
+for corpus in corpora_list:
+    # Check if the corpus has a 'display_name' attribute and if it matches the desired name
     if getattr(corpus, 'display_name', None) == corpa_name:
-        print(f"Existing Corpa found. Using {corpus.name}")
-        
-        # You already have the corpus object, no need to call get_corpus usually
-        # If 'corpus' object from the list is sufficient, use it directly.
-        # If you MUST get a fresh object or different type, uncomment the next line:
-        # rag_corpus = rag.get_corpus(name=corpus.name) 
-        found_corpus = corpus # Store the found corpus object
-        
-        print(f"This corpus contains the following files:")
+        print(f"Existing RAG Corpus found with display name '{corpa_name}'. Using: {corpus.name}")
+        rag_corpus = corpus # Assign the found corpus object
+        print(f"This corpus ('{corpus.name}') contains the following files:")
         try:
-            # List files associated with the found corpus
-            for file in rag.list_files(corpus.name): # Use corpus.name
-                print(getattr(file, 'display_name', 'N/A')) # Safer access
+            # List the files within the found corpus
+            files_pager = rag.list_files(corpus.name) # Use the corpus resource name
+            for file in files_pager:
+                # Print the display name of each file, handling potential missing attribute
+                print(f" - {getattr(file, 'display_name', 'N/A (No display name)')}")
         except Exception as e:
-            print(f"Warning: Could not list files for {corpus.name}. Error: {e}")
-            
-        break # Exit the loop as soon as we find the match
+            # Handle errors during file listing (e.g., permissions)
+            print(f"Warning: Could not list files for corpus {corpus.name}. Error: {e}")
+        break # Exit the loop once the matching corpus is found
 
-# After the loop, check if we found anything
-if found_corpus is None:
-    # The loop completed without finding the corpus
-    print(f"No existing {corpa_name} resource found. Creating one now.")
+# If the loop finished without finding the corpus
+if rag_corpus is None:
+    print(f"No existing RAG corpus found with display name '{corpa_name}'. Creating one now.")
     try:
+        # Call the function to create the corpus and import files
         rag_corpus = create_rag_corpora(corpa_name, corpa_document_bucket)
-        print(f"New RAG corpus created at {rag_corpus.name}")
+        print(f"New RAG corpus creation initiated with name: {rag_corpus.name}")
+        print("Note: File import and indexing may take some time to complete in the background.")
     except Exception as e:
-        print(f"Error creating corpus {corpa_name}: {e}")
-        rag_corpus = None # Indicate failure
+        # Handle errors during corpus creation
+        print(f"Error creating RAG corpus '{corpa_name}': {e}")
+        rag_corpus = None # Ensure rag_corpus remains None on failure
 else:
-    # The corpus was found in the loop
-    rag_corpus = found_corpus # Assign the found corpus to the main variable
+    # Corpus was found in the loop
+    print(f"\nUsing existing RAG corpus: {rag_corpus.name}")
 
-# Now 'rag_corpus' holds either the found or newly created corpus (or None if creation failed)
-# You can proceed to use 'rag_corpus' here
+# Final check and confirmation message
 if rag_corpus:
-    print(f"\nProceeding with corpus: {rag_corpus.name}")
-    # ... your next steps using rag_corpus ...
+    print(f"\nProceeding with RAG corpus: {rag_corpus.name} (Display Name: {rag_corpus.display_name})")
+    # Example test call to get_gcs_uri (can be removed if not needed for debugging)
+    # test_uri_result = get_gcs_uri('How do I install a Nest E thermostat')
+    # print(f"Test call to get_gcs_uri result: {test_uri_result}")
 else:
-    print(f"\nFailed to find or create corpus '{corpa_name}'. Cannot proceed.")
-    
-    
-    
-    
-    
-test = get_gcs_uri('How do I install a Nest E thermostat')
-print(test)
+    print(f"\nFailed to find or create RAG corpus '{corpa_name}'. RAG functionality will not work.")
 
+
+# --- Sub-Agent Definitions ---
 # @title Define RAG, Reasoning and Notes Sub-Agents
 
 # --- RAG Agent ---
+# This agent's role is to use the RAG tool (get_gcs_uri) to find relevant document URIs.
 rag_agent = None
 try:
     rag_agent = Agent(
-        model="gemini-2.0-flash-001",
-        name="rag_agent",
-        instruction="""
-          You are a customer support agent. You help locate documentation that will resolve customer issues.
-          Identify the most relevant support document that pertains to the question.
-          Your job is to only provide the GCS URI for the closest matching document, not to resolve the issue.
-          You will use the get_gcs_uri to identify the correct file. 
-          The response from get_gcs_uri will be a text string like 'gs://bucket_name/folder/file 1.pdf'
-          Determine which files are relevant to the customer's question and return them to the root agent.
+        model="gemini-2.0-flash-001", # Specifies the LLM to power this agent
+        name="rag_agent",             # Unique name for this agent
+        instruction=                  # Prompt defining the agent's behavior and goal
+        """
+          You are a customer support agent specialized in document retrieval.
+          Your sole purpose is to identify the Google Cloud Storage (GCS) URIs of support documents relevant to the user's query.
+          Use the 'get_gcs_uri' tool to find the closest matching document(s).
+          The tool will return a JSON string containing a list of URIs, like '["gs://bucket/file1.pdf", "gs://bucket/file2.txt"]'.
+          Return only this JSON string of URIs back to the main agent. Do not attempt to answer the user's question directly or summarize the documents.
         """,
-        description="Retrieves information from a RAG Engine instance and returns the GCS URI of relevant files.",
+        description="Retrieves relevant document GCS URIs from the RAG system based on a query.", # Description used when this agent is a tool for another agent
         tools=[
-            get_gcs_uri
+            get_gcs_uri # Make the get_gcs_uri function available as a tool to this agent
         ],
     )
     print(f"✅ Agent '{rag_agent.name}' created.")
 except Exception as e:
-    print(f"❌ Could not create Greeting agent. Error: {e}")
-
+    print(f"❌ Could not create RAG agent. Error: {e}")
 
 # -- Reasoning Agent ---
+# This agent's role is to generate troubleshooting steps based on document content
+# (which is expected to be in the context after add_file_to_session is called).
 reasoning_agent = None
 try:
     reasoning_agent = Agent(
-        model="gemini-2.5-pro-exp-03-25",
+        #model="gemini-2.5-pro-exp-03-25", # Using a different model to account for potential resource constraints
+        model="gemini-2.5-flash-preview-04-17",
         name="reasoning_agent",
-        instruction="""
-          You are a customer support agent. You help define the troubleshooting process to resolve customer issues.
-          Use the information in the document to define the process for resolving the issue.
-          Once the files have been added to your context, use that information to outline the process needed to resolve the identified problem.
-          If multiple documents are provided, specify which document or documents contains the relevant information to resolve the issue.
-          The process needs to outline the activities for the Nest technical support representitive to perform.
-          The notes system only supports plain text. Ensure you only use text in your output.
-      
-          Example:
-          Step 1: Do this
-          Step 2: Do this other task
-          Step 3: etc
+        instruction=
+        """
+          You are a technical support specialist. Your task is to create a clear, step-by-step troubleshooting plan based on the provided support documents (which are now in your context).
+          The user's original problem description will be provided.
+          Analyze the information within the document(s) made available in this session context.
+          If multiple documents were relevant, clearly state which document(s) contain the information used for the plan.
+          The plan should outline the actions a Nest technical support representative should take to resolve the customer's issue.
+          Format the output as a numbered list of steps.
+          Ensure the output contains only plain text suitable for adding to a support ticket note (no markdown, formatting, etc.).
+
+          Example Output:
+          Based on the document 'gs://bucket/nest_install_guide.pdf':
+          Step 1: Verify thermostat wiring matches the guide's diagram.
+          Step 2: Check for power delivery to the thermostat base.
+          Step 3: Follow the pairing instructions in section 4.
         """,
-        description="Defines the troubleshooting process to help resolve the customer's problem",
+        description="Generates a troubleshooting plan based on information from provided documents.",
         tools=[
-            #add_file_to_session,
+            # No specific tools needed here; relies on context provided by the root agent.
+            # add_file_to_session, # This tool is called by the ROOT agent *before* calling this reasoning agent.
         ],
     )
     print(f"✅ Agent '{reasoning_agent.name}' created.")
 except Exception as e:
-    print(f"❌ Could not create Greeting agent. Error: {e}")
+    print(f"❌ Could not create Reasoning agent. Error: {e}")
 
-
-
-# --- Notest Agent ---
+# --- Notes Agent ---
+# This agent's role is to format the troubleshooting plan and add it as a note to the ticket system.
 notes_agent = None
 try:
     notes_agent = Agent(
         model="gemini-2.0-flash-001",
         name="notes_agent",
-        instruction="""
+        instruction=
+        """
             You are a customer support assistant agent. Your primary task is to generate informative and well-structured notes for customer support tickets. 
             These notes will be added to the ticket's history and used by customer support representatives to understand the issue, track progress, and provide consistent service.
+            Step 1: Check if you have the user's ticket ID and contact name (you can use their provided name or email as contact name). If not, politely ask for the informaiton you are missing.
+            Step 2: Once you have the ticket ID, contact name, and the troubleshooting steps, use the 'add_note' tool to add the notes to the ticket.
+            Step 3: Confirm to the user that the ticket has been updated with the troubleshooting plan.
+            Step 4: Thank the customer for their time and to have a nice day.
         """,
-        description="Add notes to the associated ticket",
+        description="Adds the generated troubleshooting plan as a note to the specified support ticket.",
         tools=[
-            add_note,
+            add_note, # Make the add_note function available as a tool
         ],
     )
     print(f"✅ Agent '{notes_agent.name}' created.")
 except Exception as e:
-    print(f"❌ Could not create Greeting agent. Error: {e}")
+    print(f"❌ Could not create Notes agent. Error: {e}")
 
-
-
+# --- Root Agent Definition ---
 # @title Define the Root Agent with Sub-Agents
 
-# Ensure sub-agents were created successfully before defining the root agent.
-# Also ensure the original 'get_weather' tool is defined.
+# Initialize root agent variables
 root_agent = None
-runner_root = None # Initialize runner
+runner_root = None # Initialize runner variable (although runner is created later)
 
+# Check if all necessary components (sub-agents and the specific tool) are available
 if rag_agent and reasoning_agent and notes_agent and 'add_file_to_session' in globals():
-    # Let's use a capable Gemini model for the root agent to handle orchestration
-    root_agent_model = 'gemini-2.0-flash-001'
-        
+
+    # Define the root agent (coordinator)
     nest_agent_team = Agent(
-        name="nest_support_agent",
-        model="gemini-2.0-flash-001",
-        description="The main coordinator agent. Handles user requests and delegates tasks to specialists.",
-        instruction="""
-        You are a Nest customer support agent. You help triage and document actions for customer support tickets. 
-        These notes will be added to the ticket's history and used by customer support representatives to understand the issue, track progress, and provide consistent service
-        "You have specialized sub-agents: "
-            "1. 'rag_agent': Handles retriving of relevant documents based on the user's question."
-            "2. 'reasoning_agent': Handles the generation of troubleshooting steps based on the user's question and related documentation."
-            "3. 'notes_agent': Adds information to the associated support ticket."
-        Take the following actions to help the user resolve their problem and update the associated support ticket.
-            Step 1: Start by identifying what the problem is, then call the rag_agent to identify the related documents.
-            Step 2: Use the add_file_to_session tool to add the document to your context.The add_file_to_session tool only supports 1 document at a time. If the rag_agent provides multiple documents, you will need to make multiple calls using the add_file_to_session tool
-            Step 3: Use the 'reasoning_agent' to help define the troubleshooting process. The reasoning_agent will return the process to troubleshoot the issue. 
-            Step 4: Acknowledge you have the troubleshooting process and let the customer know you will update their ticket.
-            Step 4: If the user has not provided you with their ticket ID and email, ask for it.
-            Step 5: Use the 'notes_agent' to add the troubleshooting process to the ticket notes. The notes_agent is expecting the following json request body:
-                {
-                    ticket_id: int - A number representing the ticket ID number
-                    contact_name: str - The name of the contact person as a string value
-                    note: str - A string value that outlines the plan of action to resolve the ticket
-                }
+        name="nest_support_agent",    # Name for the root agent
+        model="gemini-2.0-flash-001", # Model for the root agent (orchestration)
+        description="The main coordinator agent. Handles user requests and delegates tasks to specialist sub-agents and tools.", # Description (useful if this agent were itself a sub-agent)
+        instruction=                  # The core instructions defining the workflow
+        """
+            You are the lead Nest customer support coordinator agent. Your goal is to understand the customer's issue, find relevant documentation, generate a troubleshooting plan, and log the plan into their support ticket.
+
+            You have access to specialized tools and sub-agents:
+            1. Tool `add_file_to_session`: Use this tool *after* getting GCS URIs. Provide ONE GCS URI (e.g., "gs://bucket/doc.pdf") to this tool. The tool prepares the file content for context. Call this tool for EACH relevant URI returned by the rag_agent.
+            2. Sub-Agent `rag_agent`: Call this agent first with the user's problem description to get a JSON list of relevant GCS document URIs.
+            3. Sub-Agent `reasoning_agent`: Call this agent *after* using `add_file_to_session` for all relevant URIs. Provide the user's problem and indicate that the relevant documents are now in context. This agent will return the troubleshooting steps.
+            4. Sub-Agent `notes_agent`: Call this agent last. You need the `ticket_id` (integer), `contact_name` (string, use your name "Nest Support Agent"), and the `note` (string, the troubleshooting steps from reasoning_agent). Ask the user for their ticket ID and name/email if you don't have it.
+
+            Start by greeting the user and ask no more than 1-2 questions to better understand the Nest product they are using and their issue.
+            IMPORTANT - When you make a tool call or hand off to another agent, politely ask the user to please wait while you research the issue.
+            Whne calling the `rag_agent` provide the user's issue description. Extract the GCS URIs from the JSON list it returns.
+            If URIs are returned from the 'rag_agent':
+                - For EACH URI in the list, call the `add_file_to_session` tool with that single URI. 
+            After processing all relevant files, call the `reasoning_agent`. Provide the user's original problem description and explicitly state that the necessary documents are in the context. Capture the troubleshooting steps it returns. 
         """,
         tools=[
-            add_file_to_session,
-            AgentTool(agent=rag_agent), 
-            AgentTool(agent=reasoning_agent)],
+            add_file_to_session,      # Make the file session tool directly available to the root agent
+            AgentTool(agent=rag_agent), # Make the rag_agent available as a tool
+            AgentTool(agent=reasoning_agent) # Make the reasoning_agent available as a tool
+            # Note: notes_agent is listed as a sub_agent, not a direct tool here.
+            # This implies delegation rather than direct tool calling for notes_agent.
+        ],
+         # List agents that this agent can delegate tasks to.
+         # The root agent decides *when* to invoke these based on its instructions.
         sub_agents=[notes_agent]
     )
-    print(f"✅ Root Agent '{nest_agent_team.name}' created using model '{root_agent_model}' with sub-agents: {[sa.name for sa in nest_agent_team.sub_agents]}")
+    # Assign the created agent to the root_agent variable for clarity in the next step
+    root_agent = nest_agent_team
+    print(f"✅ Root Agent '{root_agent.name}' created using model '{root_agent.model}' with sub-agents: {[sa.name for sa in root_agent.sub_agents]}")
 
 else:
-    print("❌ Cannot create root agent because one or more sub-agents failed to initialize or 'add_file_to_session' tool is missing.")
-    if not rag_agent: print(" - RAG Agent is missing.")
-    if not farewell_agent: print(" - Farewell Agent is missing.")
-    if 'get_weather' not in globals(): print(" - get_weather function is missing.")
+    # Print errors if sub-agents or tools were not initialized correctly
+    print("❌ Cannot create root agent because one or more components are missing.")
+    if not rag_agent: print(" - RAG Agent ('rag_agent') is missing.")
+    if not reasoning_agent: print(" - Reasoning Agent ('reasoning_agent') is missing.")
+    if not notes_agent: print(" - Notes Agent ('notes_agent') is missing.")
+    if 'add_file_to_session' not in globals(): print(" - Tool 'add_file_to_session' function is missing.")
+    root_agent = None # Ensure root_agent is None if creation failed
 
-
-
-
-    
+# --- Agent Interaction Execution ---
 # @title Interact with the Agent Team
 
-# Ensure the root agent (e.g., 'nest_agent_team' or 'root_agent' from the previous cell) is defined.
-# Ensure the call_agent_async function is defined.
-
-# Check if the root agent variable exists before defining the conversation function
-root_agent_var_name = 'root_agent' # Default name from Step 3 guide
-if 'nest_agent_team' in globals(): # Check if user used this name instead
-    root_agent_var_name = 'nest_agent_team'
-elif 'root_agent' not in globals():
-    print("⚠️ Root agent ('root_agent' or 'nest_agent_team') not found. Cannot define run_team_conversation.")
-    # Assign a dummy value to prevent NameError later if the code block runs anyway
-    root_agent = None
-
-if root_agent_var_name in globals() and globals()[root_agent_var_name]:
+# Check if the root agent was successfully created in the previous step
+if root_agent:
+    # Define an async function to run the interactive conversation flow
     async def run_team_conversation():
-        print("\n--- Testing Agent Team Delegation ---")
-        # InMemorySessionService is simple, non-persistent storage for this tutorial.
+        print("\n--- Starting Interactive Agent Session ---")
+        print("Type 'quit', 'exit', or 'bye' to end the conversation.")
+        # Use InMemorySessionService for simple, non-persistent conversation state management
         session_service = InMemorySessionService()
 
-        # Define constants for identifying the interaction context
-        APP_NAME = "nets_support_agent_team"
-        USER_ID = "user_1_agent_team"
-        SESSION_ID = "session_001_agent_team" # Using a fixed ID for simplicity
+        # Define identifiers for the application, user, and session
+        APP_NAME = "nest_support_agent_team_app" # An arbitrary name for the application context
+        USER_ID = "interactive_user_01" # An identifier for the interactive user
+        SESSION_ID = f"session_{os.urandom(8).hex()}" # Generate a unique session ID for each run
 
-        # Create the specific session where the conversation will happen
+        # Create (or get) the session object using the service
+        # This session will store the conversation history for the given user/session ID.
         session = session_service.create_session(
             app_name=APP_NAME,
             user_id=USER_ID,
             session_id=SESSION_ID
         )
-        print(f"Session created: App='{APP_NAME}', User='{USER_ID}', Session='{SESSION_ID}'")
+        print(f"Session created: User='{USER_ID}', Session='{SESSION_ID}'")
 
         # --- Get the actual root agent object ---
-        # Use the determined variable name
-        actual_root_agent = globals()[root_agent_var_name]
+        # (Already assigned to root_agent variable)
 
-        # Create a runner specific to this agent team test
+        # Create an ADK Runner instance for the root agent.
+        # The runner manages the execution flow, tool calls, and sub-agent delegation.
         runner = Runner(
-            agent=actual_root_agent, # Use the root agent object
-            app_name=APP_NAME,       # Use the specific app name
-            session_service=session_service # Use the specific session service
+            agent=root_agent, # The root agent object orchestrates the interaction
+            app_name=APP_NAME, # Associate the runner with the application context
+            session_service=session_service # Provide the session service for state management
+            # artifact_service can be added here if needed for file handling beyond basic context
+        )
+        print(f"Runner created for root agent '{root_agent.name}'. Ready for interaction.\n")
+
+        # --- Interactive Conversation Loop ---
+        while True:
+            # Get user input from the console
+            try:
+                query = input("You: ")
+            except EOFError: # Handle Ctrl+D or similar end-of-file signals
+                print("\nExiting...")
+                break
+
+            # Check for exit commands
+            if query.lower() in ["quit", "exit", "bye"]:
+                print("Agent: Goodbye!")
+                break
+
+            # If input is empty, just loop again
+            if not query.strip():
+                continue
+
+            # Call the agent with the user's query
+            await call_agent_async(
+                query=query,
+                runner=runner,
+                user_id=USER_ID,
+                session_id=SESSION_ID
             )
-        # Corrected print statement to show the actual root agent's name
-        print(f"Runner created for agent '{actual_root_agent.name}'.")
 
-        # Always interact via the root agent's runner, passing the correct IDs
-        await call_agent_async(query = "Hello there!", runner=runner, user_id=USER_ID, session_id=SESSION_ID)
-        await call_agent_async(query = "I need to know how to setup my nest gen 3 unit.", runner=runner, user_id=USER_ID, session_id=SESSION_ID)
-        await call_agent_async(query = "My name is John Doe and email is johnDoe@here.com. My ticket number is 132436.", runner=runner, user_id=USER_ID, session_id=SESSION_ID)
-        await call_agent_async(query = "Great, thank you!", runner=runner, user_id=USER_ID, session_id=SESSION_ID)
+    # --- Execute the asynchronous conversation ---
+    # Use asyncio.run() to start the event loop and run the run_team_conversation function.
+    # This initiates the interaction with the agent team.
+    print("\nInitializing conversation...")
+    try:
+        asyncio.run(run_team_conversation())
+    except KeyboardInterrupt: # Handle Ctrl+C gracefully
+        print("\nConversation interrupted by user. Exiting.")
+    print("\n--- Conversation Finished ---")
 
-    # Execute the conversation
-    # Note: This may require API keys for the models used by root and sub-agents!
-    asyncio.run(run_team_conversation())
 else:
-    print("\n⚠️ Skipping agent team conversation as the root agent was not successfully defined in the previous step.")
-    
-    
-    
-    
+    # Message if the root agent wasn't created successfully
+    print("\n⚠️ Skipping agent team conversation as the root agent ('nest_agent_team' or 'root_agent') was not successfully defined.")
 
-
+# --- End of Script ---
