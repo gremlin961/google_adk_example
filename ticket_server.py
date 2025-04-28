@@ -20,6 +20,7 @@ class Note(BaseModel):
 # File paths (using os.path for better cross-platform compatibility)
 TICKETS_FILE = os.path.join(os.path.dirname(__file__), "tickets.txt")
 NOTES_FILE = os.path.join(os.path.dirname(__file__), "notes.txt")
+print(f'Using file {NOTES_FILE} for notes.')
 
 
 # Helper function to write data to a file
@@ -66,4 +67,4 @@ if __name__ == "__main__":
     if not os.path.exists(NOTES_FILE):
          open(NOTES_FILE, 'w').close()
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)
