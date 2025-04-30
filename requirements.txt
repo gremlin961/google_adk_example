@@ -1,3 +1,10 @@
+google-cloud-aiplatform
+google-cloud-storage
+google-cloud-bigquery
+google-api-core
+google-genai
+google-adk
 fastapi
 pydantic
 uvicorn
+requests

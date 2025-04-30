@@ -1,9 +1,6 @@
-ticket_id: 44454, contact_name: Richard, note: Troubleshooting plan to install Nest E thermostat:
+ticket_id: 33343, contact_name: Richard, note: Troubleshooting plan to help install the black wire:
 
-Step 1: Confirm you've turned off power to your HVAC system at the breaker or switch before starting the installation.
-Step 2: Verify you've properly removed your old thermostat and correctly identified and labeled the wires.
-Step 3: Check the wiring connections at the Nest E base, ensuring they match the diagrams in the installation guide for your specific system type.
-Step 4: Confirm the Nest E display is securely clicked into place on the base.
-Step 5: Restore power to the HVAC system.
-Step 6: Go through the initial setup process on the Nest E thermostat display or the Google Home app, checking for any errors during this process.
-Step 7: If the thermostat does not power on or shows an error, troubleshoot based on the specific error message or lack of power (e.g., check for a C wire connection if needed, verify breaker is on).
+Step 1: Identify the label on the terminal where the black wire was connected on your previous thermostat.
+Step 2: Refer to the wiring diagrams in the Nest Thermostat E installation guide (page 5) to determine the corresponding terminal on the Nest Thermostat E base for that label.
+Step 3: Connect the black wire to the identified terminal on the Nest Thermostat E base according to the label it had on the old thermostat.
+Step 4: Review the connected wires on the Nest base against the diagram for your system type to ensure correct installation.
