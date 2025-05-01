@@ -70,7 +70,7 @@ warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.ERROR)
 
 # --- Configuration ---
-project_id = "rkiles-demo-host-vpc" # Your GCP Project ID
+project_id = "YOUR_PROJECT_ID" # Your GCP Project ID
 location = "global" # You can leave this setting as global
 region = "us-central1" # Your region. This notebook has only been tested in us-central1
 

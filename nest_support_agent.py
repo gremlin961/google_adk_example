@@ -82,7 +82,38 @@ vertexai.init(project=project_id, location=region)
 
 
 
+# Define an asynchronous function to interact with an ADK agent runner
+async def call_agent_async(query: str, runner: Runner, user_id: str, session_id: str): # <--- Added parameters for session context
+    """Sends a query to the agent and prints the final response."""
+    #print(f"\n>>> User Query: {query}")
 
+    # Prepare the user's message in the ADK Content format
+    content = types.Content(role='user', parts=[types.Part(text=query)])
+
+    # Default response text if the agent doesn't provide one
+    final_response_text = "Agent did not produce a final response."
+
+    # Key Concept: runner.run_async executes the agent logic and yields Events asynchronously.
+    # We iterate through these events to capture the agent's actions and final response.
+    # Use the passed-in user_id and session_id for maintaining conversation state.
+    async for event in runner.run_async(user_id=user_id, session_id=session_id, new_message=content):
+        # You can uncomment the line below to see *all* events during execution for debugging
+        # print(f"  [Event] Author: {event.author}, Type: {type(event).__name__}, Final: {event.is_final_response()}, Content: {event.content}")
+
+        # Key Concept: event.is_final_response() indicates the agent's concluding message for this turn.
+        if event.is_final_response():
+            # Check if the event has content (usually the agent's text response)
+            if event.content and event.content.parts:
+                # Assume the text response is in the first part
+                final_response_text = event.content.parts[0].text
+            # Check if the agent escalated (e.g., encountered an error or needs human help)
+            elif event.actions and event.actions.escalate:
+                final_response_text = f"Agent escalated: {event.error_message or 'No specific message.'}"
+            # Add more checks here if needed (e.g., specific error codes)
+            break # Stop processing events once the final response is found
+
+    # Print the agent's final response for this turn
+    print(f"Agent: {final_response_text}") # Added "Agent: " prefix
 
 
 
@@ -456,4 +487,86 @@ root_agent = nest_agent_team
 
 
 
+# --- Agent Interaction Execution ---
+# @title Interact with the Agent Team
 
+# Check if the root agent was successfully created in the previous step
+if root_agent:
+    # Define an async function to run the interactive conversation flow
+    async def run_team_conversation():
+        print("\n--- Starting Interactive Agent Session ---")
+        print("Type 'quit', 'exit', or 'bye' to end the conversation.")
+        # Use InMemorySessionService for simple, non-persistent conversation state management
+        session_service = InMemorySessionService()
+        # Instantiate the desired artifact service
+        artifact_service = InMemoryArtifactService()
+        
+
+        # Define identifiers for the application, user, and session
+        APP_NAME = "nest_support_agent_team_app" # An arbitrary name for the application context
+        USER_ID = "interactive_user_01" # An identifier for the interactive user
+        SESSION_ID = f"session_{os.urandom(8).hex()}" # Generate a unique session ID for each run
+
+        # Create (or get) the session object using the service
+        # This session will store the conversation history for the given user/session ID.
+        session = session_service.create_session(
+            app_name=APP_NAME,
+            user_id=USER_ID,
+            session_id=SESSION_ID
+        )
+        print(f"Session created: User='{USER_ID}', Session='{SESSION_ID}'")
+
+        # --- Get the actual root agent object ---
+        # (Already assigned to root_agent variable)
+
+        # Create an ADK Runner instance for the root agent.
+        # The runner manages the execution flow, tool calls, and sub-agent delegation.
+        runner = Runner(
+            agent=root_agent, # The root agent object orchestrates the interaction
+            app_name=APP_NAME, # Associate the runner with the application context
+            session_service=session_service, # Provide the session service for state management
+            artifact_service=artifact_service 
+        )
+        print(f"Runner created for root agent '{root_agent.name}'. Ready for interaction.\n")
+
+        # --- Interactive Conversation Loop ---
+        while True:
+            # Get user input from the console
+            try:
+                query = input("You: ")
+            except EOFError: # Handle Ctrl+D or similar end-of-file signals
+                print("\nExiting...")
+                break
+
+            # Check for exit commands
+            if query.lower() in ["quit", "exit", "bye"]:
+                print("Agent: Goodbye!")
+                break
+
+            # If input is empty, just loop again
+            if not query.strip():
+                continue
+
+            # Call the agent with the user's query
+            await call_agent_async(
+                query=query,
+                runner=runner,
+                user_id=USER_ID,
+                session_id=SESSION_ID
+            )
+
+    # --- Execute the asynchronous conversation ---
+    # Use asyncio.run() to start the event loop and run the run_team_conversation function.
+    # This initiates the interaction with the agent team.
+    print("\nInitializing conversation...")
+    try:
+        asyncio.run(run_team_conversation())
+    except KeyboardInterrupt: # Handle Ctrl+C gracefully
+        print("\nConversation interrupted by user. Exiting.")
+    print("\n--- Conversation Finished ---")
+
+else:
+    # Message if the root agent wasn't created successfully
+    print("\nSkipping agent team conversation as the root agent ('nest_agent_team' or 'root_agent') was not successfully defined.")
+
+# --- End of Script ---
