@@ -4,3 +4,12 @@ Step 1: Identify the label on the terminal where the black wire was connected on
 Step 2: Refer to the wiring diagrams in the Nest Thermostat E installation guide (page 5) to determine the corresponding terminal on the Nest Thermostat E base for that label.
 Step 3: Connect the black wire to the identified terminal on the Nest Thermostat E base according to the label it had on the old thermostat.
 Step 4: Review the connected wires on the Nest base against the diagram for your system type to ensure correct installation.
+ticket_id: 87787, contact_name: Richard, note: Troubleshooting plan:
+
+**Step 1:** Re-verify your wiring against the diagrams in the installation guide, paying close attention to the Y1 terminal (for cooling/compressor) and the C terminal (common wire, if present). Ensure wires are fully inserted and secure.
+**Step 2:** Confirm you have correctly configured the system type (Conventional, Heat Pump) and controlled functions (heating, cooling) within the thermostat settings (Settings > Equipment). Check the O/B wire setting if it's a heat pump.
+**Step 3:** Check the circuit breaker or fuse box for the HVAC system and ensure the breaker controlling the air conditioner/furnace/heat pump is switched on.
+**Step 4:** Run a system test via the thermostat interface (Settings > Equipment > Test > Cooling or Heat) to specifically test the compressor circuit. Observe if the compressor attempts to start or if any errors appear on the display.
+**Step 5:** Wait at least 5 minutes after requesting cooling, thermostats have built-in delays to protect the compressor.
+**Step 6:** If a C-wire is connected, confirm it is correctly connected at both the thermostat base and the HVAC system's control board. If no C-wire is present, inquire about any previous power-related issues or errors.
+**Step 7:** Review the HVAC system's compatibility details with the guide to rule out fundamental incompatibility.
