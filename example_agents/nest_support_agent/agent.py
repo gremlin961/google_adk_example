@@ -56,20 +56,27 @@ import warnings # For suppressing warnings
 import logging # For controlling logging output
 import mimetypes # For detecting mime types of files
 import io
+from dotenv import load_dotenv
+
+
+# --- Configuration ---
+load_dotenv()
+project_id = os.environ.get('GOOGLE_CLOUD_PROJECT') # Your GCP Project ID
+location = os.environ.get('GOOGLE_CLOUD_LOCATION') # Vertex AI RAG location (can be global for certain setups)
+region = os.environ.get('GOOGLE_CLOUD_REGION') # Your GCP region for Vertex AI resources and GCS bucket
+corpa_name = "nest-rag-corpus" # Display name for the Vertex AI RAG Corpus
+ticket_server_url = "http://localhost:8001" # URL of the mock ticketing system web service
+
+
 
 # Ignore all warnings
 warnings.filterwarnings("ignore")
 # Set logging level to ERROR to suppress informational messages
 logging.basicConfig(level=logging.ERROR)
 
-# --- Configuration ---
-project_id = "YOUR_PROJECT_ID" # Your GCP Project ID
-location = "global" # Vertex AI RAG location (can be global for certain setups)
-region = "us-central1" # Your GCP region for Vertex AI resources and GCS bucket
 
-corpa_name = "nest-rag-corpus" # Display name for the Vertex AI RAG Corpus
 
-ticket_server_url = "http://localhost:8001" # URL of the mock ticketing system web service
+
 
 # --- Environment Setup ---
 # Set environment variables required by some Google Cloud libraries
@@ -367,7 +374,7 @@ reasoning_agent = Agent(
     """
         You are a technical support specialist. Your task is to create a clear, step-by-step troubleshooting plan based on the provided support documents (which are now in your context).
         The user's original problem description will be provided.
-        Analyze the information within the document(s) made available in this session context.
+        Analyze the information within the document(s) made available as artifacts.
         Clearly state which document(s) contain the information used for the plan.
         The plan should outline the actions a Nest technical support representative should take to resolve the customer's issue.
         Format the output as a numbered list of steps.
@@ -439,6 +446,7 @@ nest_agent_team = Agent(
         If URIs are returned from the 'rag_agent':
             - For EACH URI in the list, call the `add_file_to_session` tool with that single URI. 
         After processing all relevant files, call the `reasoning_agent`. Provide the user's original problem description and explicitly state that the necessary documents are in the context. Capture the troubleshooting steps it returns. 
+        Display the response from the `reasoning_agent` exactly as you received it. Do not summarize the troubleshooting steps.
     """,
     tools=[
         add_file_to_session,      # Make the file session tool directly available to the root agent
