@@ -33,6 +33,7 @@ from google.adk.sessions import InMemorySessionService # Simple session manageme
 from google.adk.artifacts import InMemoryArtifactService, GcsArtifactService # In-memory artifact storage
 from google.adk.tools.agent_tool import AgentTool # Wrapper to use one agent as a tool for another
 from google.adk.tools import ToolContext
+from google.adk.tools import load_artifacts
 
 # Vertex GenAI Modules (Alternative/Legacy way to interact with Gemini, used here for types)
 import google.genai
@@ -380,8 +381,8 @@ reasoning_agent = Agent(
     """,
     description="Generates a troubleshooting plan based on information from provided documents.",
     tools=[
-        # No specific tools needed here; relies on context provided by the root agent.
-        # add_file_to_session, # This tool is called by the ROOT agent *before* calling this reasoning agent.
+        # Use the built in load_artifacts tool to access artifacts, in this case the PDF files.
+        load_artifacts,
     ],
 )
 
