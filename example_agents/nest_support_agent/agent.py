@@ -65,7 +65,7 @@ warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.ERROR)
 
 # --- Configuration ---
-project_id = "rkiles-demo-host-vpc" # Your GCP Project ID
+project_id = "YOUR_PROJECT_ID" # Your GCP Project ID
 location = "global" # Vertex AI RAG location (can be global for certain setups)
 region = "us-central1" # Your GCP region for Vertex AI resources and GCS bucket
 
