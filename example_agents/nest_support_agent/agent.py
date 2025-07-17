@@ -59,24 +59,19 @@ import io
 from dotenv import load_dotenv
 
 
-# --- Configuration ---
-load_dotenv()
-project_id = os.environ.get('GOOGLE_CLOUD_PROJECT') # Your GCP Project ID
-location = os.environ.get('GOOGLE_CLOUD_LOCATION') # Vertex AI RAG location (can be global for certain setups)
-region = os.environ.get('GOOGLE_CLOUD_REGION') # Your GCP region for Vertex AI resources and GCS bucket
-corpa_name = "nest-rag-corpus" # Display name for the Vertex AI RAG Corpus
-ticket_server_url = "http://localhost:8001" # URL of the mock ticketing system web service
-
-
-
 # Ignore all warnings
 warnings.filterwarnings("ignore")
 # Set logging level to ERROR to suppress informational messages
 logging.basicConfig(level=logging.ERROR)
 
+# --- Configuration ---
+project_id = "rkiles-demo-host-vpc" # Your GCP Project ID
+location = "global" # Vertex AI RAG location (can be global for certain setups)
+region = "us-central1" # Your GCP region for Vertex AI resources and GCS bucket
 
+corpa_name = "nest-rag-corpus" # Display name for the Vertex AI RAG Corpus
 
-
+ticket_server_url = "http://localhost:8001" # URL of the mock ticketing system web service
 
 # --- Environment Setup ---
 # Set environment variables required by some Google Cloud libraries
@@ -90,7 +85,38 @@ vertexai.init(project=project_id, location=region)
 
 
 
+# Define an asynchronous function to interact with an ADK agent runner
+async def call_agent_async(query: str, runner: Runner, user_id: str, session_id: str): # <--- Added parameters for session context
+    """Sends a query to the agent and prints the final response."""
+    #print(f"\n>>> User Query: {query}")
 
+    # Prepare the user's message in the ADK Content format
+    content = types.Content(role='user', parts=[types.Part(text=query)])
+
+    # Default response text if the agent doesn't provide one
+    final_response_text = "Agent did not produce a final response."
+
+    # Key Concept: runner.run_async executes the agent logic and yields Events asynchronously.
+    # We iterate through these events to capture the agent's actions and final response.
+    # Use the passed-in user_id and session_id for maintaining conversation state.
+    async for event in runner.run_async(user_id=user_id, session_id=session_id, new_message=content):
+        # You can uncomment the line below to see *all* events during execution for debugging
+        # print(f"  [Event] Author: {event.author}, Type: {type(event).__name__}, Final: {event.is_final_response()}, Content: {event.content}")
+
+        # Key Concept: event.is_final_response() indicates the agent's concluding message for this turn.
+        if event.is_final_response():
+            # Check if the event has content (usually the agent's text response)
+            if event.content and event.content.parts:
+                # Assume the text response is in the first part
+                final_response_text = event.content.parts[0].text
+            # Check if the agent escalated (e.g., encountered an error or needs human help)
+            elif event.actions and event.actions.escalate:
+                final_response_text = f"Agent escalated: {event.error_message or 'No specific message.'}"
+            # Add more checks here if needed (e.g., specific error codes)
+            break # Stop processing events once the final response is found
+
+    # Print the agent's final response for this turn
+    print(f"Agent: {final_response_text}") # Added "Agent: " prefix
 
 
 
@@ -166,7 +192,7 @@ def add_note(ticket_id: int, contact_name: str, note: str) -> Dict[str, Any]:
 # within the ADK framework, hence the return type change to `str` in the user's code.
 # The core idea is to signal *which* file should be considered by the next agent.
 # def add_file_to_session(uri: str) -> types.Content: # Original intended signature
-def add_file_to_session(uri: str, tool_context: ToolContext) -> str: # Modified signature as per user code
+async def add_file_to_session(uri: str, tool_context: ToolContext) -> str: # Modified signature as per user code
     """
     Adds a specific file from Google Cloud Storage (GCS) to the current session state for agent processing.
 
@@ -213,6 +239,7 @@ def add_file_to_session(uri: str, tool_context: ToolContext) -> str: # Modified 
 
     # Detect the MIME type of the file
     mime_type, encoding = mimetypes.guess_type(filename)
+    #mime_type = "application/pdf"
     #print(f"Detected MIME type: {mime_type}")
 
     # This part attempts to create a Content object referencing the GCS URI.
@@ -223,7 +250,7 @@ def add_file_to_session(uri: str, tool_context: ToolContext) -> str: # Modified 
         )
     )
     
-    version = tool_context.save_artifact(
+    version = await tool_context.save_artifact(
         filename=filename, artifact=file_artifact
     )
     #content = types.Content(
@@ -251,6 +278,24 @@ def add_file_to_session(uri: str, tool_context: ToolContext) -> str: # Modified 
 
     return f'Artifact {filename} has been created with version {version}'
 
+
+async def list_user_files_py(tool_context: ToolContext) -> str:
+    """Tool to list available artifacts for the user."""
+    try:
+        available_files = await tool_context.list_artifacts()
+        if not available_files:
+            return "You have no saved artifacts."
+        else:
+            # Format the list for the user/LLM
+            file_list_str = "\n".join([f"- {fname}" for fname in available_files])
+            return f"Here are your available Python artifacts:\n{file_list_str}"
+    except ValueError as e:
+        print(f"Error listing Python artifacts: {e}. Is ArtifactService configured?")
+        return "Error: Could not list Python artifacts."
+    except Exception as e:
+        print(f"An unexpected error occurred during Python artifact list: {e}")
+        return "Error: An unexpected error occurred while listing Python artifacts."
+    
 
 # Tool function to query the RAG corpus and retrieve relevant GCS URIs
 def get_gcs_uri(query: str) -> str:
@@ -345,7 +390,7 @@ if rag_corpus is None:
 # This agent's role is to use the RAG tool (get_gcs_uri) to find relevant document URIs.
 rag_agent = None
 rag_agent = Agent(
-    model="gemini-2.0-flash-001", # Specifies the LLM to power this agent
+    model="gemini-2.5-flash", # Specifies the LLM to power this agent
     name="rag_agent",             # Unique name for this agent
     instruction=                  # Prompt defining the agent's behavior and goal
     """
@@ -362,44 +407,14 @@ rag_agent = Agent(
 )
 
 
-# -- Reasoning Agent ---
-# This agent's role is to generate troubleshooting steps based on document content
-# (which is expected to be in the context after add_file_to_session is called).
-reasoning_agent = None
-reasoning_agent = Agent(
-    model="gemini-2.5-pro-exp-03-25", # Advanced model for complex tasks and reasoning
-    #model="gemini-2.5-flash-preview-04-17", # Alternate Model that can be used to help address resource constraints with more advanced models
-    name="reasoning_agent",
-    instruction=
-    """
-        You are a technical support specialist. Your task is to create a clear, step-by-step troubleshooting plan based on the provided support documents (which are now in your context).
-        The user's original problem description will be provided.
-        Analyze the information within the document(s) made available as artifacts.
-        Clearly state which document(s) contain the information used for the plan.
-        The plan should outline the actions a Nest technical support representative should take to resolve the customer's issue.
-        Format the output as a numbered list of steps.
-        Ensure the output contains only plain text suitable for adding to a support ticket note (no markdown, formatting, etc.).
 
-        Example Output:
-        Based on the document 'gs://bucket/nest_install_guide.pdf':
-        Step 1: Verify thermostat wiring matches the guide's diagram.
-        Step 2: Check for power delivery to the thermostat base.
-        Step 3: Follow the pairing instructions in section 4.
-    """,
-    description="Generates a troubleshooting plan based on information from provided documents.",
-    tools=[
-        # Use the built in load_artifacts tool to access artifacts, in this case the PDF files.
-        load_artifacts,
-    ],
-)
 
 
 # --- Notes Agent ---
 # This agent's role is to format the troubleshooting plan and add it as a note to the ticket system.
 notes_agent = None
 notes_agent = Agent(
-    model="gemini-2.0-flash-001",
-    #model="gemini-2.0-flash-exp", # Model that supports Audio input and output
+    model="gemini-2.5-flash",
     name="notes_agent",
     instruction=
     """
@@ -427,42 +442,44 @@ runner_root = None # Initialize runner variable (although runner is created late
     # Define the root agent (coordinator)
 nest_agent_team = Agent(
     name="nest_support_agent",    # Name for the root agent
-    model="gemini-2.0-flash-001", # Model for the root agent (orchestration)
-    #model="gemini-2.0-flash-exp", # Model that supports Audio input and output 
+    model="gemini-2.5-pro", # Model for the root agent (orchestration)
     description="The main coordinator agent. Handles user requests and delegates tasks to specialist sub-agents and tools.", # Description (useful if this agent were itself a sub-agent)
     instruction=                  # The core instructions defining the workflow
     """
-        You are the lead Nest customer support coordinator agent. Your goal is to understand the customer's issue, find relevant documentation, generate a troubleshooting plan, and log the plan into their support ticket.
+        You are a technical support specialist. Your task is to create a clear, step-by-step troubleshooting plan based on the provided support documents (which are now in your context).
+        The user's original problem description will be provided.
+        Analyze the information within the document(s) made available in this session context.
+        Clearly state which document(s) contain the information used for the plan.
+        The plan should outline the actions a Nest technical support representative should take to resolve the customer's issue.
+        Format the output as a numbered list of steps.
+        Ensure the output contains only plain text suitable for adding to a support ticket note (no markdown, formatting, etc.).
 
-        You have access to specialized tools and sub-agents:
-        1. Tool `add_file_to_session`: Use this tool *after* getting GCS URIs. Provide ONE GCS URI (e.g., "gs://bucket/doc.pdf") to this tool. The tool prepares the file content for context. Call this tool for EACH relevant URI returned by the rag_agent.
-        2. Sub-Agent `rag_agent`: Call this agent first with the user's problem description to get a JSON list of relevant GCS document URIs.
-        3. Sub-Agent `reasoning_agent`: Call this agent *after* using `add_file_to_session` for all relevant URIs. Provide the user's problem and indicate that the relevant documents are now in context. This agent will return the troubleshooting steps.
-        4. Sub-Agent `notes_agent`: Call this agent last. You need the `ticket_id` (integer), `contact_name` (string, use your name "Nest Support Agent"), and the `note` (string, the troubleshooting steps from reasoning_agent). Ask the user for their ticket ID and name/email if you don't have it.
+        You have the following tools available to you:
+        add_file_to_session - Add a file to the the list of artifacts
+        list_user_files_py - List artifacts
+        rag_agent - Used to find a list of available documents you can use to help troubleshoot the user's problem.
 
-        Start by greeting the user and ask no more than 1-2 questions to better understand the Nest product they are using and their issue.
-        IMPORTANT - When you make a tool call or hand off to another agent, politely ask the user to please wait while you research the issue.
-        Whne calling the `rag_agent` provide the user's issue description. Extract the GCS URIs from the JSON list it returns.
-        If URIs are returned from the 'rag_agent':
-            - For EACH URI in the list, call the `add_file_to_session` tool with that single URI. 
-        After processing all relevant files, call the `reasoning_agent`. Provide the user's original problem description and explicitly state that the necessary documents are in the context. Capture the troubleshooting steps it returns. 
-        Display the response from the `reasoning_agent` exactly as you received it. Do not summarize the troubleshooting steps.
+
+        Example Output:
+        Based on the document 'gs://bucket/nest_install_guide.pdf':
+        Step 1: Verify thermostat wiring matches the guide's diagram.
+        Step 2: Check for power delivery to the thermostat base.
+        Step 3: Follow the pairing instructions in section 4.
     """,
     tools=[
         add_file_to_session,      # Make the file session tool directly available to the root agent
+        list_user_files_py,
+        load_artifacts,
         AgentTool(agent=rag_agent), # Make the rag_agent available as a tool
-        AgentTool(agent=reasoning_agent) # Make the reasoning_agent available as a tool
         # Note: notes_agent is listed as a sub_agent, not a direct tool here.
         # This implies delegation rather than direct tool calling for notes_agent.
     ],
-        # List agents that this agent can delegate tasks to.
-        # The root agent decides *when* to invoke these based on its instructions.
-    sub_agents=[notes_agent]
+    # List agents that this agent can delegate tasks to.
+    # The root agent decides *when* to invoke these based on its instructions.
+    sub_agents=[
+        notes_agent,
+    ]
 )
 
 # Assign the created agent to the root_agent variable for clarity in the next step
 root_agent = nest_agent_team
-
-
-
-
