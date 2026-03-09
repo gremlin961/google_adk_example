@@ -64,6 +64,45 @@ This Jupyter notebook demonstrates how to build an agentic workflow using Google
 
 ---
 
+## Automated Environment Setup with Cloud Build (Optional)
+
+As an alternative to setting up the environment interactively from within the Jupyter notebook, you can use the provided automated setup scripts and Google Cloud Build configurations. 
+
+This provisions:
+- **GCS Buckets**: Creates buckets and uploads document/data assets automatically.
+- **RAG Corpus**: Creates and imports items to a Vertex AI RAG Corpus securely.
+- **BigQuery Tables**: Deploys structured BigQuery dataset tables initialized from static data bundles.
+
+### Option A: Local Python Script execution
+Run the setup and teardown routines directly on your local authenticated machine:
+
+```bash
+# Setup Environment
+python setup_env.py \
+  --project_id="YOUR_PROJECT_ID" \
+  --doc_bucket="gs://YOUR_PROJECT_ID-support-docs" \
+  --bq_bucket="gs://YOUR_PROJECT_ID-bq-data"
+
+# Teardown / Cleanup Environment
+python teardown_env.py \
+  --project_id="YOUR_PROJECT_ID" \
+  --doc_bucket="gs://YOUR_PROJECT_ID-support-docs" \
+  --bq_bucket="gs://YOUR_PROJECT_ID-bq-data"
+```
+
+### Option B: Google Cloud Build pipelines
+Alternatively, execute these as managed jobs directly via Cloud Build:
+
+```bash
+# Run Automated Setup Setup
+gcloud builds submit --config=cloudbuild-setup.yaml
+
+# Run Automated Cleanup/Teardown
+gcloud builds submit --config=cloudbuild-teardown.yaml
+```
+
+---
+
 ## Setup Mock Ticket Server (GCE Instance)
 
 The notebook interacts with a simple mock ticketing API provided by `ticket_server.py`. You need to run this server on a machine accessible from where you run the notebook. A small Google Compute Engine (GCE) instance is a suitable option.
