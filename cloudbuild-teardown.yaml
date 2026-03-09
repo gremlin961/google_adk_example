@@ -1,0 +1,13 @@
+steps:
+- name: 'gcr.io/cloud-builders/git'
+  args: ['clone', 'https://github.com/$PROJECT_ID/google_adk_example']
+- name: 'python:3.10'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    pip install -r google_adk_example/requirements.txt
+    python google_adk_example/teardown_env.py \
+      --project_id=$PROJECT_ID \
+      --doc_bucket=gs://$PROJECT_ID-support-docs \
+      --bq_bucket=gs://$PROJECT_ID-bq-data
